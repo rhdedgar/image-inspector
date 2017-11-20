@@ -171,6 +171,39 @@ func (i *defaultImageInspector) acquireAndScan() error {
 			i.meta.ImageAcquireError = err.Error()
 			return err
 		}
+
+		i.meta.Image = *meta.Image
+		scanResults.ImageID = meta.Image.ID
+		scanResults.ContainerID = meta.Container.ID
+
+		var filterInclude map[string]struct{}
+
+		if i.opts.ScanContainerChanges {
+			filterInclude, err = i.getContainerChanges(client, meta)
+		}
+
+		i.opts.DstPath = fmt.Sprintf("/host/proc/%d/root/", meta.Container.State.Pid)
+
+		excludePrefixes := []string{
+			i.opts.DstPath + "proc",
+			i.opts.DstPath + "sys",
+		}
+
+		filterFn = func(path string, fileInfo os.FileInfo) bool {
+			if filterInclude != nil {
+				if _, ok := filterInclude[path]; !ok {
+					return false
+				}
+			}
+
+			for _, prefix := range excludePrefixes {
+				if strings.HasPrefix(path, prefix) {
+					return false
+				}
+			}
+
+			return true
+		}
 	}
 
 	switch i.opts.ScanType {
@@ -249,6 +282,7 @@ func (i *defaultImageInspector) postResults(scanResults iiapi.ScanResult) error 
 	if err != nil {
 		return err
 	}
+        defer resp.Body.Close()
 	log.Printf("DEBUG: Success: %v", resp)
 	return nil
 }

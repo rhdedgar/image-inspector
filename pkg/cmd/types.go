@@ -12,7 +12,7 @@ import (
 	util "github.com/openshift/image-inspector/pkg/util"
 )
 
-const DefaultDockerSocketLocation = "unix:///var/run/docker.sock"
+const DefaultDockerSocketLocation = "unix:///host/var/run/docker.sock"
 
 // MultiStringVar is implementing flag.Value
 type MultiStringVar struct {

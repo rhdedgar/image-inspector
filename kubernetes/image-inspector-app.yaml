@@ -18,9 +18,9 @@ spec:
     securityContext:
       privileged: true
     volumeMounts:
-    - mountPath: /var/run/docker.sock
+    - mountPath: /host/var/run/docker.sock
       name: docker-socket
   volumes:
   - hostPath:
-      path: /var/run/docker.sock
+      path: /host/var/run/docker.sock
     name: docker-socket
