@@ -1,7 +1,6 @@
 package inspector
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -13,39 +12,18 @@ import (
 	iicmd "github.com/openshift/image-inspector/pkg/cmd"
 )
 
-type FailMockScanner struct{}
-type SuccMockScanner struct {
-	FailMockScanner
-}
-type NoResMockScanner struct {
-	SuccMockScanner
-}
-type SuccWithReportMockScanner struct {
-	SuccMockScanner
-}
-
-func (ms *FailMockScanner) Scan(context.Context, string, *docker.Image, iiapi.FilesFilter) ([]iiapi.Result, interface{}, error) {
-	return nil, nil, fmt.Errorf("FAIL SCANNER!")
-}
-func (ms *FailMockScanner) Name() string {
-	return "MockScanner"
-}
-func (ms *SuccMockScanner) Scan(context.Context, string, *docker.Image, iiapi.FilesFilter) ([]iiapi.Result, interface{}, error) {
-	return []iiapi.Result{}, nil, nil
-}
-
-func TestScanImage(t *testing.T) {
-	ctx := context.Background()
+func TestAcquiringInInspect(t *testing.T) {
 	for k, v := range map[string]struct {
-		ii         defaultImageInspector
-		s          iiapi.Scanner
-		shouldFail bool
+		ii             defaultImageInspector
+		shouldFail     bool
+		expectedAcqErr string
 	}{
-		"Scanner fails on scan": {ii: defaultImageInspector{}, s: &FailMockScanner{}, shouldFail: true},
-		"Happy Flow":            {ii: defaultImageInspector{}, s: &SuccMockScanner{}, shouldFail: false},
+		"Scanner fails on scan": {ii: defaultImageInspector{opts: iicmd.ImageInspectorOptions{URI: "No such file", Serve: ""}},
+			shouldFail:     false,
+			expectedAcqErr: "invalid endpoint",
+		},
 	} {
-		v.ii.opts.DstPath = "here"
-		_, _, err := v.s.Scan(ctx, v.ii.opts.DstPath, nil, nil)
+		err := v.ii.Inspect()
 		if v.shouldFail && err == nil {
 			t.Errorf("%s should have failed but it didn't!", k)
 		}
@@ -53,6 +31,9 @@ func TestScanImage(t *testing.T) {
 			if err != nil {
 				t.Errorf("%s should have succeeded but failed with %v", k, err)
 			}
+		}
+		if v.ii.meta.ImageAcquireError != v.expectedAcqErr {
+			t.Errorf("%s acquire error is not matching.\nExtected: %v\nReceived: %v\n", k, v.expectedAcqErr, v.ii.meta.ImageAcquireError)
 		}
 	}
 }
