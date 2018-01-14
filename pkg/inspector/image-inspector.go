@@ -391,7 +391,7 @@ func (i *defaultImageInspector) pullImage(client DockerRuntimeClient) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("Unable to pull docker image: %v\n", err)
+	return fmt.Errorf("Unable to pull docker image: %v", err)
 }
 
 // createAndExtractImage creates a docker container based on the option's image with containerName.
@@ -647,6 +647,9 @@ func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error,
 
 		if i.opts.ScanContainerChanges {
 			filterInclude, err = i.getContainerChanges(client, meta)
+			if err != nil {
+				return err, docker.Image{}, "", "", nil
+			}
 		}
 
 		i.opts.DstPath = fmt.Sprintf("/proc/%d/root/", meta.Container.State.Pid)
