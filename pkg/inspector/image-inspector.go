@@ -257,8 +257,8 @@ func aggregateBytesAndReport(bytesChan chan int) {
 // from reader. It will start aggregateBytesAndReport with bytesChan
 // and will push the difference of bytes downloaded to bytesChan.
 // Errors encountered during parsing are reported to parsedErrors channel.
-// After reader is closed it will send nil on parsedErrors, close bytesChan and exit.
-func decodeDockerResponse(parsedErrors chan error, reader io.Reader) {
+// After reader is closed it will send nil on parsedErrors, close bytesChan and send true on finished.
+func decodeDockerResponse(parsedErrors chan error, reader io.Reader, finished chan bool) {
 	type progressDetailType struct {
 		Current, Total int
 	}
@@ -303,6 +303,8 @@ func decodeDockerResponse(parsedErrors chan error, reader io.Reader) {
 			bytesChan <- (bytes - last)
 		}
 	}
+
+	finished <- true
 }
 
 func (i *defaultImageInspector) getContainerMeta(client DockerRuntimeClient) (*containerMeta, error) {
@@ -359,7 +361,13 @@ func (i *defaultImageInspector) pullImage(client DockerRuntimeClient) error {
 	var err error
 	for name, auth := range imagePullAuths.Configs {
 		parsedErrors := make(chan error, 100)
-		defer func() { close(parsedErrors) }()
+		finished := make(chan bool, 1)
+
+		defer func() {
+			<-finished
+			close(finished)
+			close(parsedErrors)
+		}()
 
 		go func() {
 			reader, writer := io.Pipe()
@@ -370,7 +378,7 @@ func (i *defaultImageInspector) pullImage(client DockerRuntimeClient) error {
 				OutputStream:  writer,
 				RawJSONStream: true,
 			}
-			go decodeDockerResponse(parsedErrors, reader)
+			go decodeDockerResponse(parsedErrors, reader, finished)
 
 			if err = client.PullImage(imagePullOption, auth); err != nil {
 				parsedErrors <- err
@@ -378,7 +386,7 @@ func (i *defaultImageInspector) pullImage(client DockerRuntimeClient) error {
 		}()
 
 		if parsedError := <-parsedErrors; parsedError != nil {
-			log.Printf("Authentication with %s failed: %v", name, parsedError)
+			log.Printf("Pulling image with authentication %s failed: %v", name, parsedError)
 		} else {
 			return nil
 		}
