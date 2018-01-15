@@ -19,7 +19,7 @@ func TestAcquiringInInspect(t *testing.T) {
 		expectedAcqErr string
 	}{
 		"Scanner fails on scan": {ii: defaultImageInspector{opts: iicmd.ImageInspectorOptions{URI: "No such file", Serve: ""}},
-			shouldFail:     false,
+			shouldFail:     true,
 			expectedAcqErr: "invalid endpoint",
 		},
 	} {
@@ -76,7 +76,7 @@ func TestGetAuthConfigs(t *testing.T) {
 	}
 
 	for k, v := range tests {
-		ii := &defaultImageInspector{*v.opts, iiapi.InspectorMetadata{}, nil}
+		ii := &defaultImageInspector{*v.opts, iiapi.InspectorMetadata{}, nil, scanOutputs{}}
 		auths, err := ii.getAuthConfigs()
 		if !v.shouldFail {
 			if err != nil {
@@ -284,7 +284,7 @@ func TestPullImage(t *testing.T) {
 		"With instant pull success client": {shouldFail: false,
 			client: mockRuntimeClientPullSuccess{}},
 	} {
-		ii := &defaultImageInspector{iicmd.ImageInspectorOptions{Image: "NoSuchImage!"}, iiapi.InspectorMetadata{}, nil}
+		ii := &defaultImageInspector{iicmd.ImageInspectorOptions{Image: "NoSuchImage!"}, iiapi.InspectorMetadata{}, nil, scanOutputs{}}
 		err := ii.pullImage(v.client)
 		if v.shouldFail {
 			if err == nil {
@@ -334,8 +334,8 @@ func TestAcquireImage(t *testing.T) {
 		"Success with running Container": {opts: fromContainer, shouldFail: false,
 			client: mockDockerRuntimeClientAllSuccess{}},
 	} {
-		ii := &defaultImageInspector{v.opts, iiapi.InspectorMetadata{}, nil}
-		err, _, _ := ii.acquireImage(v.client)
+		ii := &defaultImageInspector{v.opts, iiapi.InspectorMetadata{}, nil, scanOutputs{}}
+		err, _ := ii.acquireImage(v.client)
 		if v.shouldFail {
 			if err == nil {
 				t.Errorf("%s should have failed but it didn't", k)

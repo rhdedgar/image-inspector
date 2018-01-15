@@ -60,12 +60,21 @@ type ImageInspector interface {
 	Inspect() error
 }
 
+// scanOutputs is a struct to hold all the scan outputs that needs to be served
+type scanOutputs struct {
+	ScanReport     []byte
+	HtmlScanReport []byte
+	ScanResults    iiapi.ScanResult
+}
+
 // defaultImageInspector is the default implementation of ImageInspector.
 type defaultImageInspector struct {
 	opts iicmd.ImageInspectorOptions
 	meta iiapi.InspectorMetadata
 	// an optional image server that will server content for inspection.
 	imageServer apiserver.ImageServer
+
+	scanOutputs scanOutputs
 }
 
 // NewInspectorMetadata returns a new InspectorMetadata out of *docker.Image
@@ -107,6 +116,13 @@ func NewDefaultImageInspector(opts iicmd.ImageInspectorOptions) ImageInspector {
 		}
 		inspector.imageServer = apiserver.NewWebdavImageServer(imageServerOpts)
 	}
+
+	inspector.scanOutputs.ScanResults = iiapi.ScanResult{
+		APIVersion: iiapi.DefaultResultsAPIVersion,
+		ImageName:  inspector.opts.Image,
+		Results:    []iiapi.Result{},
+	}
+
 	return inspector
 }
 
@@ -122,81 +138,84 @@ type DockerRuntimeClient interface {
 
 // Inspect inspects and serves the image based on the ImageInspectorOptions.
 func (i *defaultImageInspector) Inspect() error {
+	err := i.acquireAndScan()
+	if err != nil {
+		i.meta.ImageAcquireError = err.Error()
+	}
+
+	if i.imageServer != nil {
+		return i.imageServer.ServeImage(&i.meta, i.opts.DstPath, i.scanOutputs.ScanResults, i.scanOutputs.ScanReport, i.scanOutputs.HtmlScanReport)
+	}
+
+	return err
+}
+
+// AcquireAndScan acquires and scans the image based on the ImageInspectorOptions.
+func (i *defaultImageInspector) acquireAndScan() error {
 	var (
 		scanner iiapi.Scanner
 		err     error
 
-		scanReport, htmlScanReport []byte
-		filterFn                   iiapi.FilesFilter
+		filterFn iiapi.FilesFilter
 	)
-
-	scanResults := iiapi.ScanResult{
-		APIVersion: iiapi.DefaultResultsAPIVersion,
-		ImageName:  i.opts.Image,
-		Results:    []iiapi.Result{},
-	}
 
 	ctx := context.Background()
 
 	client, err := docker.NewClient(i.opts.URI)
 	if err != nil {
 		i.meta.ImageAcquireError = err.Error()
+		return err
 	} else {
-		err, scanResults.ContainerID, filterFn = i.acquireImage(client)
+		err, filterFn = i.acquireImage(client)
 		if err != nil {
 			i.meta.ImageAcquireError = err.Error()
+			return err
 		}
 	}
 
-	if err == nil {
-		switch i.opts.ScanType {
-		case "openscap":
-			if i.opts.ScanResultsDir, err = createOutputDir(i.opts.ScanResultsDir, "image-inspector-scan-results-"); err != nil {
-				return err
-			}
-			var (
-				results   []iiapi.Result
-				reportObj interface{}
-			)
-			scanner = openscap.NewDefaultScanner(OSCAP_CVE_DIR, i.opts.ScanResultsDir, i.opts.CVEUrlPath, i.opts.OpenScapHTML)
-			results, reportObj, err = scanner.Scan(ctx, i.opts.DstPath, &i.meta.Image, filterFn)
-			if err != nil {
-				i.meta.OpenSCAP.SetError(err)
-				log.Printf("DEBUG: Unable to scan image %q with OpenSCAP: %v", i.opts.Image, err)
-			} else {
-				i.meta.OpenSCAP.Status = iiapi.StatusSuccess
-				report := reportObj.(openscap.OpenSCAPReport)
-				scanReport = report.ArfBytes
-				htmlScanReport = report.HTMLBytes
-				scanResults.Results = append(scanResults.Results, results...)
-			}
-
-		case "clamav":
-			scanner, err = clamav.NewScanner(i.opts.ClamSocket)
-			if err != nil {
-				return fmt.Errorf("failed to initialize clamav scanner: %v", err)
-			}
-			results, _, err := scanner.Scan(ctx, i.opts.DstPath, &i.meta.Image, filterFn)
-			if err != nil {
-				log.Printf("DEBUG: Unable to scan image %q with ClamAV: %v", i.opts.Image, err)
-				return err
-			}
-			scanResults.Results = append(scanResults.Results, results...)
-
-		default:
-			return fmt.Errorf("unsupported scan type: %s", i.opts.ScanType)
+	switch i.opts.ScanType {
+	case "openscap":
+		if i.opts.ScanResultsDir, err = createOutputDir(i.opts.ScanResultsDir, "image-inspector-scan-results-"); err != nil {
+			return err
+		}
+		var (
+			results   []iiapi.Result
+			reportObj interface{}
+		)
+		scanner = openscap.NewDefaultScanner(OSCAP_CVE_DIR, i.opts.ScanResultsDir, i.opts.CVEUrlPath, i.opts.OpenScapHTML)
+		results, reportObj, err = scanner.Scan(ctx, i.opts.DstPath, &i.meta.Image, filterFn)
+		if err != nil {
+			i.meta.OpenSCAP.SetError(err)
+			log.Printf("DEBUG: Unable to scan image %q with OpenSCAP: %v", i.opts.Image, err)
+		} else {
+			i.meta.OpenSCAP.Status = iiapi.StatusSuccess
+			report := reportObj.(openscap.OpenSCAPReport)
+			i.scanOutputs.ScanReport = report.ArfBytes
+			i.scanOutputs.HtmlScanReport = report.HTMLBytes
+			i.scanOutputs.ScanResults.Results = append(i.scanOutputs.ScanResults.Results, results...)
 		}
 
-		if len(i.opts.PostResultURL) > 0 {
-			if err := i.postResults(scanResults); err != nil {
-				log.Printf("Error posting results: %v", err)
-				return nil
-			}
+	case "clamav":
+		scanner, err = clamav.NewScanner(i.opts.ClamSocket)
+		if err != nil {
+			return fmt.Errorf("failed to initialize clamav scanner: %v", err)
 		}
+		results, _, err := scanner.Scan(ctx, i.opts.DstPath, &i.meta.Image, filterFn)
+		if err != nil {
+			log.Printf("DEBUG: Unable to scan image %q with ClamAV: %v", i.opts.Image, err)
+			return err
+		}
+		i.scanOutputs.ScanResults.Results = append(i.scanOutputs.ScanResults.Results, results...)
+
+	default:
+		return fmt.Errorf("unsupported scan type: %s", i.opts.ScanType)
 	}
 
-	if i.imageServer != nil {
-		return i.imageServer.ServeImage(&i.meta, i.opts.DstPath, scanResults, scanReport, htmlScanReport)
+	if len(i.opts.PostResultURL) > 0 {
+		if err := i.postResults(i.scanOutputs.ScanResults); err != nil {
+			log.Printf("Error posting results: %v", err)
+			return err
+		}
 	}
 
 	return nil
@@ -604,21 +623,20 @@ func createOutputDir(dirName string, tempName string) (string, error) {
 	return dirName, nil
 }
 
-// acquireImage returns error,
-// the container ID that the image was acquired from, and iiapi.FilesFilter for this image.
-func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error, string, iiapi.FilesFilter) {
+// acquireImage returns error and iiapi.FilesFilter for this image.
+func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error, iiapi.FilesFilter) {
 	var err error
 	if len(i.opts.Container) == 0 {
 		imageMetaBefore, inspectErrBefore := client.InspectImage(i.opts.Image)
 		if i.opts.PullPolicy == iiapi.PullNever && inspectErrBefore != nil {
 			return fmt.Errorf("Image %s is not available and pull-policy %s doesn't allow pulling",
-				i.opts.Image, i.opts.PullPolicy), "", nil
+				i.opts.Image, i.opts.PullPolicy), nil
 		}
 
 		if i.opts.PullPolicy == iiapi.PullAlways ||
 			(i.opts.PullPolicy == iiapi.PullIfNotPresent && inspectErrBefore != nil) {
 			if err = i.pullImage(client); err != nil {
-				return err, "", nil
+				return err, nil
 			}
 		}
 
@@ -630,29 +648,30 @@ func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error,
 
 		randomName, err := generateRandomName()
 		if err != nil {
-			return err, "", nil
+			return err, nil
 		}
 
 		imageMetadata, err := i.createAndExtractImage(client, randomName)
 		if err != nil {
-			return err, "", nil
+			return err, nil
 		}
 		i.meta.Image = *imageMetadata
 
-		return nil, "", nil
+		return nil, nil
 	} else {
 		meta, err := i.getContainerMeta(client)
 		if err != nil {
-			return err, "", nil
+			return err, nil
 		}
 		i.meta.Image = *meta.Image
+		i.scanOutputs.ScanResults.ContainerID = meta.Container.ID
 
 		var filterInclude map[string]struct{}
 
 		if i.opts.ScanContainerChanges {
 			filterInclude, err = i.getContainerChanges(client, meta)
 			if err != nil {
-				return err, "", nil
+				return err, nil
 			}
 		}
 
@@ -678,6 +697,6 @@ func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error,
 
 			return true
 		}
-		return nil, meta.Container.ID, filterFn
+		return nil, filterFn
 	}
 }
