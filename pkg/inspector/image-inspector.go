@@ -139,11 +139,13 @@ func (i *defaultImageInspector) Inspect() error {
 	ctx := context.Background()
 
 	client, err := docker.NewClient(i.opts.URI)
-	if err == nil {
-		err, i.meta.Image, scanResults.ImageID, scanResults.ContainerID, filterFn = i.acquireImage(client)
-	}
 	if err != nil {
 		i.meta.ImageAcquireError = err.Error()
+	} else {
+		err, scanResults.ContainerID, filterFn = i.acquireImage(client)
+		if err != nil {
+			i.meta.ImageAcquireError = err.Error()
+		}
 	}
 
 	if err == nil {
@@ -602,21 +604,21 @@ func createOutputDir(dirName string, tempName string) (string, error) {
 	return dirName, nil
 }
 
-// acquireImage returns error, the docker image that was acquired, the image ID,
+// acquireImage returns error,
 // the container ID that the image was acquired from, and iiapi.FilesFilter for this image.
-func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error, docker.Image, string, string, iiapi.FilesFilter) {
+func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error, string, iiapi.FilesFilter) {
 	var err error
 	if len(i.opts.Container) == 0 {
 		imageMetaBefore, inspectErrBefore := client.InspectImage(i.opts.Image)
 		if i.opts.PullPolicy == iiapi.PullNever && inspectErrBefore != nil {
 			return fmt.Errorf("Image %s is not available and pull-policy %s doesn't allow pulling",
-				i.opts.Image, i.opts.PullPolicy), docker.Image{}, "", "", nil
+				i.opts.Image, i.opts.PullPolicy), "", nil
 		}
 
 		if i.opts.PullPolicy == iiapi.PullAlways ||
 			(i.opts.PullPolicy == iiapi.PullIfNotPresent && inspectErrBefore != nil) {
 			if err = i.pullImage(client); err != nil {
-				return err, docker.Image{}, "", "", nil
+				return err, "", nil
 			}
 		}
 
@@ -628,27 +630,29 @@ func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error,
 
 		randomName, err := generateRandomName()
 		if err != nil {
-			return err, docker.Image{}, "", "", nil
+			return err, "", nil
 		}
 
 		imageMetadata, err := i.createAndExtractImage(client, randomName)
 		if err != nil {
-			return err, docker.Image{}, "", "", nil
+			return err, "", nil
 		}
+		i.meta.Image = *imageMetadata
 
-		return nil, *imageMetadata, imageMetadata.ID, "", nil
+		return nil, "", nil
 	} else {
 		meta, err := i.getContainerMeta(client)
 		if err != nil {
-			return err, docker.Image{}, "", "", nil
+			return err, "", nil
 		}
+		i.meta.Image = *meta.Image
 
 		var filterInclude map[string]struct{}
 
 		if i.opts.ScanContainerChanges {
 			filterInclude, err = i.getContainerChanges(client, meta)
 			if err != nil {
-				return err, docker.Image{}, "", "", nil
+				return err, "", nil
 			}
 		}
 
@@ -674,6 +678,6 @@ func (i *defaultImageInspector) acquireImage(client DockerRuntimeClient) (error,
 
 			return true
 		}
-		return nil, *meta.Image, meta.Image.ID, meta.Container.ID, filterFn
+		return nil, meta.Container.ID, filterFn
 	}
 }

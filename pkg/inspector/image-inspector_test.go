@@ -335,7 +335,7 @@ func TestAcquireImage(t *testing.T) {
 			client: mockDockerRuntimeClientAllSuccess{}},
 	} {
 		ii := &defaultImageInspector{v.opts, iiapi.InspectorMetadata{}, nil}
-		err, _, _, _, _ := ii.acquireImage(v.client)
+		err, _, _ := ii.acquireImage(v.client)
 		if v.shouldFail {
 			if err == nil {
 				t.Errorf("%s should have failed but it didn't", k)
