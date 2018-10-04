@@ -12,7 +12,10 @@ import (
 	"strings"
 	"time"
 
-	docker "github.com/fsouza/go-dockerclient"
+	//docker "github.com/fsouza/go-dockerclient"
+
+	//docker "github.com/openshift/image-inspector/pkg/containerspec"
+	docker "../containerspec"
 
 	iiapi "github.com/openshift/image-inspector/pkg/api"
 	"github.com/openshift/image-inspector/pkg/clamav"
